@@ -3,15 +3,22 @@ import java.util.Arrays;
 import java.util.Random;
 
 enum Loss {
-    MSE;
+    MSE,
+    CROSS_ENTROPY;
 
     static double getLossOf(Loss loss, double[] actual, double[] pred) {
+        double res = 0.0;
         switch(loss) {
             case MSE:
-                double res = 0.0;
                 for (int elem = 0; elem < actual.length; ++elem) {
                     res += Math.pow(pred[elem] - actual[elem], 2);
                 }
+                return res;
+            case CROSS_ENTROPY:
+                for (int elem = 0; elem < actual.length; ++elem) {
+                    res += actual[elem] * Math.log10(pred[elem]);
+                }
+                res = -1 * res;
                 return res;
             default:
                 throw new IllegalArgumentException(String.format("Loss function does not exist / not yet supported!. Please try %s", values().toString()));
@@ -19,12 +26,18 @@ enum Loss {
     }
 
     static double[] getDerivLossOf(Loss loss, double[] actual, double[] pred) {
+        int numNeurons = actual.length;
+        double[] res = new double[numNeurons];
         switch(loss) {
             case MSE:
-                int numNeurons = actual.length;
-                double[] res = new double[numNeurons];
                 for (int elem  = 0; elem < numNeurons; ++elem) {
                     res[elem] = 2 * (pred[elem] - actual[elem]);
+                }
+                return res;
+            case CROSS_ENTROPY:
+                double constant = Math.log10(Math.E);
+                for (int elem = 0; elem < numNeurons; ++elem) {
+                    res[elem] = (pred[elem] - actual[elem]) * constant;//(-1) * actual[elem] * (1.0 / pred[elem]) * constant;
                 }
                 return res;
             default:
@@ -48,12 +61,12 @@ enum ActivFunc {
                 return res;
             case SOFTMAX:
                 double maxElem = getMaxOf(in);
-                double[] shiftedIn = new double[numElems];
+                //double[] shiftedIn = new double[numElems];
                 double[] expShiftedIn = new double[numElems];
                 double sumElems = 0.0;
                 for (int elem = 0; elem < numElems; ++elem) {
-                    shiftedIn[elem] = in[elem] - maxElem;
-                    expShiftedIn[elem] = Math.exp(shiftedIn[elem]);
+                    //shiftedIn[elem] = in[elem] - maxElem;
+                    expShiftedIn[elem] = Math.exp(in[elem] - maxElem);
                     sumElems += expShiftedIn[elem];
                 }
                 for (int elem = 0; elem < numElems; ++elem) {
@@ -117,6 +130,30 @@ class Layer implements Serializable {
         this.learnRate = learnRate;
     }
 
+    int getNumNeurons() {
+        return numNeurons;
+    }
+
+    int getNumWeights() {
+        return numWeights;
+    }
+
+    double[][] getW() {
+        return W;
+    }
+
+    double[][] getWt() {
+        return Wt;
+    }
+
+    double[] getB() {
+        return B;
+    }
+
+    double getLearnRate() {
+        return learnRate;
+    }
+
     double[] feedforward(double[] X){
         return Matrix.add(Matrix.makeVector(Matrix.multiply(X, W, numWeights, numNeurons), 1, numNeurons), B);
     }
@@ -157,30 +194,46 @@ class Network implements Serializable {
     private static final long serialVersionUID = 2L;
     private int numLayers;
     private Loss lossType;
-    private ActivFunc activFuncType;
+    private ActivFunc[] activFuncType;
     private Layer[] layers;
 
-    private Network(int numLayers, Layer[] layers, Loss lossType, ActivFunc activFuncType) {
+    private Network(int numLayers, Layer[] layers, Loss lossType, ActivFunc[] activFuncType) {
         this.numLayers = numLayers;
         this.layers = layers;
         this.lossType = lossType;
         this.activFuncType = activFuncType;
     }
 
+    int getNumLayers() {
+        return numLayers;
+    }
+
+    Loss getLossType() {
+        return lossType;
+    }
+
+    ActivFunc[] getActivFuncType() {
+        return activFuncType;
+    }
+
+    Layer[] getLayers() {
+        return layers;
+    }
+
     void train(String inFileName, int epochs) throws IOException {
         boolean append = false;
         String outFileName = "results-" + inFileName;
         for (int epoch = 0; epoch < epochs; ++epoch, append = true) {
-            int digit = 0;
             try (BufferedReader reader = new BufferedReader(new FileReader(inFileName))) {
                 try (PrintWriter writer = new PrintWriter(new FileWriter(outFileName, append))) {
+                    int sample = 1;
                     writer.printf("Epoch %d:\n", epoch);
                     while (reader.ready()) {
                         double[] in = Arrays.stream(reader.readLine().split("")).mapToDouble(ch -> ch.equals("X") ? 1.0 : 0.0).toArray();
                         double[] actual = Arrays.stream(reader.readLine().split(" ")).mapToDouble(Double::parseDouble).toArray();
                         double loss = learn(in, actual);
-                        writer.printf("Digit %d: Loss = %f\n", digit, loss);
-                        ++digit;
+                        writer.printf("Sample %d: Loss = %f\n", sample, loss);
+                        ++sample;
                     }
                     writer.println();
                 } catch (FileNotFoundException e) {
@@ -192,81 +245,6 @@ class Network implements Serializable {
         }
     }
 
-    void trainDefault(int epochs) {
-        double[][] inData = {{1, 1, 1, 1, 0, 1, 1, 0, 1, 1, 0, 1, 1, 1, 1},
-                             {0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0},
-                             {1, 1, 1, 0, 0, 1, 1, 1, 1, 1, 0, 0, 1, 1, 1},
-                             {1, 1, 1, 0, 0, 1, 1, 1, 1, 0, 0, 1, 1, 1, 1},
-                             {1, 0, 1, 1, 0, 1, 1, 1, 1, 0, 0, 1, 0, 0, 1},
-                             {1, 1, 1, 1, 0, 0, 1, 1, 1, 0, 0, 1, 1, 1, 1},
-                             {1, 1, 1, 1, 0, 0, 1, 1, 1, 1, 0, 1, 1, 1, 1},
-                             {1, 1, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1},
-                             {1, 1, 1, 1, 0, 1, 1, 1, 1, 1, 0, 1, 1, 1, 1},
-                             {1, 1, 1, 1, 0, 1, 1, 1, 1, 0, 0, 1, 1, 1, 1},
-                {0, 1, 1, 1, 0, 1, 1, 0, 1, 1, 0, 1, 1, 1, 1},
-                {1, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0},
-                {0, 1, 1, 0, 0, 1, 1, 1, 1, 1, 0, 0, 1, 1, 1},
-                {0, 1, 1, 0, 0, 1, 1, 1, 1, 0, 0, 1, 1, 1, 1},
-                {0, 0, 1, 1, 0, 1, 1, 1, 1, 0, 0, 1, 0, 0, 1},
-                {0, 1, 1, 1, 0, 0, 1, 1, 1, 0, 0, 1, 1, 1, 1},
-                {0, 1, 1, 1, 0, 0, 1, 1, 1, 1, 0, 1, 1, 1, 1},
-                {0, 1, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1},
-                {0, 1, 1, 1, 0, 1, 1, 1, 1, 1, 0, 1, 1, 1, 1},
-                {0, 1, 1, 1, 0, 1, 1, 1, 1, 0, 0, 1, 1, 1, 1},
-                    {1, 0, 1, 1, 0, 1, 1, 0, 1, 1, 0, 1, 1, 1, 1},
-                    {0, 0, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0},
-                    {1, 0, 1, 0, 0, 1, 1, 1, 1, 1, 0, 0, 1, 1, 1},
-                    {1, 0, 1, 0, 0, 1, 1, 1, 1, 0, 0, 1, 1, 1, 1},
-                    {1, 0, 0, 1, 0, 1, 1, 1, 1, 0, 0, 1, 0, 0, 1},
-                    {1, 0, 1, 1, 0, 0, 1, 1, 1, 0, 0, 1, 1, 1, 1},
-                    {1, 0, 1, 1, 0, 0, 1, 1, 1, 1, 0, 1, 1, 1, 1},
-                    {1, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1},
-                    {1, 0, 1, 1, 0, 1, 1, 1, 1, 1, 0, 1, 1, 1, 1},
-                    {1, 0, 1, 1, 0, 1, 1, 1, 1, 0, 0, 1, 1, 1, 1}
-        };
-
-        double[][] actualData = {{1, 0, 0, 0, 0, 0, 0, 0, 0, 0},
-                                 {0, 1, 0, 0, 0, 0, 0, 0, 0, 0},
-                                 {0, 0, 1, 0, 0, 0, 0, 0, 0, 0},
-                                 {0, 0, 0, 1, 0, 0, 0, 0, 0, 0},
-                                 {0, 0, 0, 0, 1, 0, 0, 0, 0, 0},
-                                 {0, 0, 0, 0, 0, 1, 0, 0, 0, 0},
-                                 {0, 0, 0, 0, 0, 0, 1, 0, 0, 0},
-                                 {0, 0, 0, 0, 0, 0, 0, 1, 0, 0},
-                                 {0, 0, 0, 0, 0, 0, 0, 0, 1, 0},
-                                 {0, 0, 0, 0, 0, 0, 0, 0, 0, 1},
-                {1, 0, 0, 0, 0, 0, 0, 0, 0, 0},
-                {0, 1, 0, 0, 0, 0, 0, 0, 0, 0},
-                {0, 0, 1, 0, 0, 0, 0, 0, 0, 0},
-                {0, 0, 0, 1, 0, 0, 0, 0, 0, 0},
-                {0, 0, 0, 0, 1, 0, 0, 0, 0, 0},
-                {0, 0, 0, 0, 0, 1, 0, 0, 0, 0},
-                {0, 0, 0, 0, 0, 0, 1, 0, 0, 0},
-                {0, 0, 0, 0, 0, 0, 0, 1, 0, 0},
-                {0, 0, 0, 0, 0, 0, 0, 0, 1, 0},
-                {0, 0, 0, 0, 0, 0, 0, 0, 0, 1},
-                {1, 0, 0, 0, 0, 0, 0, 0, 0, 0},
-                {0, 1, 0, 0, 0, 0, 0, 0, 0, 0},
-                {0, 0, 1, 0, 0, 0, 0, 0, 0, 0},
-                {0, 0, 0, 1, 0, 0, 0, 0, 0, 0},
-                {0, 0, 0, 0, 1, 0, 0, 0, 0, 0},
-                {0, 0, 0, 0, 0, 1, 0, 0, 0, 0},
-                {0, 0, 0, 0, 0, 0, 1, 0, 0, 0},
-                {0, 0, 0, 0, 0, 0, 0, 1, 0, 0},
-                {0, 0, 0, 0, 0, 0, 0, 0, 1, 0},
-                {0, 0, 0, 0, 0, 0, 0, 0, 0, 1}};
-
-        for (int epoch = 0; epoch < epochs; ++epoch) {
-            System.out.printf("Epoch %d:\n", epoch);
-            for (int digit = 0; digit < actualData.length; ++digit) {
-                System.out.printf("Digit %d: ", digit%10);
-                double loss = learn(inData[digit], actualData[digit]);
-                System.out.printf("Loss: %f\n", loss);
-            }
-            System.out.println();
-        }
-    }
-
     private double learn(double[] in, double[] actual) {
         double[] inOut = in;
         double[][] outsLin = new double[numLayers][];
@@ -275,7 +253,7 @@ class Network implements Serializable {
         for (int layer = 0; layer < numLayers; ++layer) {
             inOut = layers[layer].feedforward(inOut);
             outsLin[layer] = inOut;
-            inOut = ActivFunc.getActivFuncOf(activFuncType, inOut);
+            inOut = ActivFunc.getActivFuncOf(activFuncType[layer], inOut);
             outsActFunc[layer] = inOut;
         }
 
@@ -284,32 +262,27 @@ class Network implements Serializable {
         double[] dEdY;
         double[] X;
         for (int layer = numLayers - 1; layer > 0; --layer) {
-            dEdY = Matrix.multiplyElemWise(dEdYActFunc, ActivFunc.getDerivActivFuncOf(activFuncType, outsLin[layer]));
+            dEdY = (layer == numLayers - 1) ? dEdYActFunc : Matrix.multiplyElemWise(dEdYActFunc, ActivFunc.getDerivActivFuncOf(activFuncType[layer], outsLin[layer]));
             X = outsActFunc[layer - 1];
             dEdYActFunc = layers[layer].backpropagate(dEdY, X);
         }
-        dEdY = Matrix.multiplyElemWise(dEdYActFunc, ActivFunc.getDerivActivFuncOf(activFuncType, outsLin[0]));
+        dEdY = Matrix.multiplyElemWise(dEdYActFunc, ActivFunc.getDerivActivFuncOf(activFuncType[0], outsLin[0]));
         X = in;
         layers[0].backpropagate(dEdY, X);
 
         return loss;
     }
 
-    int displayAns(double[] in) {
+    double[] displayAns(double[] in) {
         double[] inOut = in;
         for (int layer = 0; layer < numLayers; ++layer) {
             inOut = layers[layer].feedforward(inOut);
+            inOut = ActivFunc.getActivFuncOf(activFuncType[layer], inOut);
         }
-        int maxNeuron = 0;
-        for (int neuron = 0; neuron < inOut.length; ++neuron) {
-            if (inOut[neuron] > inOut[maxNeuron]) {
-                maxNeuron = neuron;
-            }
-        }
-        return maxNeuron;
+        return inOut;
     }
 
-    static Network createRandomGaussianNetwork(int[] layerSizes, Loss lossType, ActivFunc activFuncType, int numInputs, double learnRate) {
+    static Network createRandomGaussianNetwork(int[] layerSizes, Loss lossType, int numInputs, double learnRate) {
         int numLayers = layerSizes.length;
         if (numLayers < 1) {
             throw new IllegalArgumentException(String.format("Cannot have < 1 layer (%d) in network", numLayers));
@@ -319,6 +292,9 @@ class Network implements Serializable {
         for (int layer = 1; layer < numLayers; ++layer) {
             layers_init[layer] = Layer.createRandomGaussianLayer(layerSizes[layer], layerSizes[layer - 1], learnRate);
         }
+        ActivFunc[] activFuncType = new ActivFunc[numLayers];
+        Arrays.fill(activFuncType, 0, numLayers - 1, ActivFunc.SIGMOID);
+        activFuncType[numLayers - 1] = ActivFunc.SOFTMAX;
         return new Network(numLayers, layers_init, lossType, activFuncType);
     }
 }
