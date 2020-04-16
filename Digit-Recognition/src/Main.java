@@ -1,99 +1,123 @@
-import java.io.File;
-import java.io.FileNotFoundException;
 import java.io.IOException;
-import java.io.PrintWriter;
 import java.util.Arrays;
 import java.util.Scanner;
 
 public class Main {
 
-    public static void main(String[] args) throws IOException, ClassNotFoundException {
+    public static void main(String[] args) throws IOException {
         Scanner scanner = new Scanner(System.in);
 
-        String networkConfigPath = "network-configs.dat";
-        String inputDataPath = "inputs.txt";
-
-        int numInputs = 15;
-        double learnRate = 0.5;
-        int[] layerSizes;
-        Loss lossType = Loss.CROSS_ENTROPY;
-        int numEpochs = 1;
-        Network network;
+        String networkConfigPath;
+        String inputDataPath;
+        Network network = null;
+        int numEpochs;
 
         boolean shouldExit = false;
 
         do {
-            System.out.println("1. Learn the network");
-            System.out.println("2. Guess a number");
-            System.out.println("3. Exit");
+            System.out.println("0. Train new network");
+            System.out.println("1. Train existing network");
+            System.out.println("2. Guess all the numbers");
+            System.out.println("3. Guess number from text file");
+            System.out.println("4. Save network configuration to file");
+            System.out.println("5. Exit");
             System.out.print("Your choice: ");
             try {
                 int choice = Integer.parseInt(scanner.nextLine());
                 switch(choice) {
-                    case 1:
-                        File file = new File(networkConfigPath);
-                        if (file.exists()) {
-                            network = (Network) SerializationUtils.deserialize(networkConfigPath);
-                        } else {
-                            System.out.print("Enter the sizes of the layers: ");
-                            layerSizes = Arrays.stream(scanner.nextLine().split(" ")).mapToInt(Integer::parseInt).toArray();
-                            network = Network.createRandomGaussianNetwork(layerSizes, lossType, numInputs, learnRate);
+                    case 0:
+                        double learnRate;
+                        int[] layerSizes;
+                        Loss lossType;
+                        System.out.print("Enter the number of inputs to network: ");
+                        int numInputs = Integer.parseInt(scanner.nextLine());
+                        System.out.print("Enter the sizes of the layers: ");
+                        layerSizes = Arrays.stream(scanner.nextLine().split(" ")).mapToInt(Integer::parseInt).toArray();
+                        System.out.print("Enter the learning rate: ");
+                        learnRate = Double.parseDouble(scanner.nextLine());
+                        System.out.printf("Enter the loss function %s:\n", Arrays.toString(Loss.values()));
+                        switch (scanner.nextLine().toLowerCase()) {
+                            case "mse":
+                                lossType = Loss.MSE;
+                                break;
+                            case "cross_entropy":
+                                lossType = Loss.CROSS_ENTROPY;
+                                break;
+
+                            default:
+                                System.out.println("Loss function not supported/existent. Default CROSS_ENTROPY chosen");
+                                lossType = Loss.CROSS_ENTROPY;
+                                break;
                         }
+                        ActivFunc[] activFuncType = new ActivFunc[layerSizes.length];
+                        for (int elem = 0; elem < layerSizes.length; ++elem) {
+                            System.out.printf("Enter the activation function for layer #%d %s:\n", elem + 1, Arrays.toString(ActivFunc.values()));
+                            switch (scanner.nextLine().toLowerCase()) {
+                                case "sigmoid":
+                                    activFuncType[elem] = ActivFunc.SIGMOID;
+                                    break;
+                                case "softmax":
+                                    activFuncType[elem] = ActivFunc.SOFTMAX;
+                                    break;
+                                case "leaky_relu":
+                                    activFuncType[elem] = ActivFunc.LEAKY_RELU;
+                                    break;
+                                case "relu":
+                                    activFuncType[elem] = ActivFunc.RELU;
+                                    break;
+                                default:
+                                    System.out.println("Activation function not supported/existent. Default SIGMOID chosen");
+                                    activFuncType[elem] = ActivFunc.SIGMOID;
+                                    break;
+                            }
+                        }
+                        network = Network.createRandomGaussianNetwork(layerSizes, lossType, activFuncType, numInputs, learnRate);
+                        System.out.print("Enter the path to the dataset: ");
+                        inputDataPath = scanner.nextLine();
+                        System.out.print("Enter the number of epochs for training: ");
+                        numEpochs = Integer.parseInt(scanner.nextLine());
+                        System.out.println("Enter the path to the network configuration file:");
+                        networkConfigPath = scanner.nextLine();
                         System.out.println("Learning...");
                         network.train(inputDataPath, numEpochs);
                         SerializationUtils.serialize(network, networkConfigPath);
-                        System.out.println("Done! Saved to the file.");
+                        break;
+                    case 1:
+                        System.out.println("Enter the path to the network configuration file:");
+                        networkConfigPath = scanner.nextLine();
+                        network = (Network) SerializationUtils.deserialize(networkConfigPath);
+                        if (network != null) {
+                            System.out.print("Enter the path to the dataset: ");
+                            inputDataPath = scanner.nextLine();
+                            System.out.print("Enter the number of epochs for training: ");
+                            numEpochs = Integer.parseInt(scanner.nextLine());
+                            System.out.println("Learning...");
+                            network.train(inputDataPath, numEpochs);
+                            SerializationUtils.serialize(network, networkConfigPath);
+                        }
                         break;
                     case 2:
-                        StringBuilder inpStr = new StringBuilder();
-                        System.out.println("Input grid:");
-                        while (scanner.hasNextLine()) {
-                            String tempStr = scanner.nextLine();
-                            if ("".equals(tempStr)) {
-                                break;
-                            }
-                            inpStr.append(tempStr);
-                        }
-                        double[] inputs = Arrays.stream(inpStr.toString().split("")).mapToDouble(ch -> ch.equals("X") ? 1.0 : 0.0).toArray();
-                        network = (Network) SerializationUtils.deserialize(networkConfigPath);
-                        //int ans = network.displayAns(inputs);
-                        double[] ans = network.displayAns(inputs);
-                        int maxNeuron = 0;
-                        for (int neuron = 1; neuron < ans.length; ++neuron) {
-                            if (ans[neuron] > ans[maxNeuron]) {
-                                maxNeuron = neuron;
-                            }
-                        }
-                        System.out.printf("This number is %d\n", maxNeuron);
-                        System.out.println();
-                        for (int elem = 0; elem < ans.length; ++elem) {
-                            System.out.printf("%f ", ans[elem]);
-                        }
-                        System.out.println();
-                        break;
                     case 3:
-                        shouldExit = true;
+                        System.out.println("Enter the path to the dataset / training example: ");
+                        inputDataPath = scanner.nextLine();
+                        System.out.println("Enter the path to the network configuration file:");
+                        networkConfigPath = scanner.nextLine();
+                        network = (Network) SerializationUtils.deserialize(networkConfigPath);
+                        if (network != null) {
+                            network.test(inputDataPath);
+                        }
                         break;
                     case 4:
-                        network = (Network) SerializationUtils.deserialize(networkConfigPath);
-                        String outPath = "network-configs.txt";
-                        try (PrintWriter writer = new PrintWriter(outPath)) {
-                            writer.println(network.getNumLayers());
-                            writer.println(network.getLossType());
-                            printArray(network.getActivFuncType(), writer);
-                            Layer[] layers = network.getLayers();
-                            for (int layer = 0; layer < network.getNumLayers(); ++layer) {
-                                writer.println(layers[layer].getNumWeights());
-                                writer.println(layers[layer].getNumNeurons());
-                                writer.println(layers[layer].getLearnRate());
-                                printArray(layers[layer].getB(), writer);
-                                printMatrix(layers[layer].getW(), writer);
-                                printMatrix(layers[layer].getWt(), writer);
-                            }
-                            System.out.println("Did the deed ;)");
-                        } catch (FileNotFoundException e) {
-                            System.out.println("Could not do the deed!");
+                        System.out.println("Enter the path to the network configuration file:");
+                        networkConfigPath = scanner.nextLine();
+                        if (network == null) {
+                            System.out.println("No existing network running!");
+                        } else {
+                            SerializationUtils.serialize(network, networkConfigPath);
                         }
+                        break;
+                    case 5:
+                        shouldExit = true;
                         break;
                     default:
                         System.out.println("Invalid choice! Try again");
@@ -102,31 +126,5 @@ public class Main {
                 System.out.println("Please enter a number 1 or 2");
             }
         } while (!shouldExit);
-    }
-
-    private static void printArray(Object[] arr, PrintWriter writer) {
-        for (int elem = 0; elem < arr.length; ++elem) {
-            writer.print(arr[elem]);
-            if (elem != arr.length - 1) {
-                writer.print(" ");
-            }
-        }
-        writer.println();
-    }
-
-    private static void printArray(double[] arr, PrintWriter writer) {
-        for (int elem = 0; elem < arr.length; ++elem) {
-            writer.print(arr[elem]);
-            if (elem != arr.length - 1) {
-                writer.print(" ");
-            }
-        }
-        writer.println();
-    }
-
-    private static void printMatrix(double[][] mat, PrintWriter writer) {
-        for (int elem = 0; elem < mat.length; ++elem) {
-            printArray(mat[elem], writer);
-        }
     }
 }

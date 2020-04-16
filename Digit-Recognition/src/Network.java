@@ -48,7 +48,9 @@ enum Loss {
 
 enum ActivFunc {
     SIGMOID,
-    SOFTMAX;
+    SOFTMAX,
+    RELU,
+    LEAKY_RELU;
 
     static double[] getActivFuncOf(ActivFunc activFunc, double[] in) {
         int numElems = in.length;
@@ -73,6 +75,16 @@ enum ActivFunc {
                     res[elem] = expShiftedIn[elem] / sumElems;
                 }
                 return res;
+            case LEAKY_RELU:
+                for (int elem = 0; elem < numElems; ++elem) {
+                    res[elem] = in[elem] > 0.0 ? in[elem] : (0.01 * in[elem]);
+                }
+                return res;
+            case RELU:
+                for (int elem = 0; elem < numElems; ++elem) {
+                    res[elem] = in[elem] > 0.0 ? in[elem] : 0.0;
+                }
+                return res;
             default:
                 throw new IllegalArgumentException(String.format("Loss function does not exist / not yet supported!. Please try %s", values().toString()));
         }
@@ -93,6 +105,16 @@ enum ActivFunc {
                 funcOut = getActivFuncOf(SOFTMAX, in);
                 for (int elem = 0; elem < numElems; ++elem) {
                     res[elem] = funcOut[elem] * (1 - funcOut[elem]);
+                }
+                return res;
+            case LEAKY_RELU:
+                for (int elem = 0; elem < numElems; ++elem) {
+                    res[elem] = in[elem] > 0.0 ? 1.0 : 0.01;
+                }
+                return res;
+            case RELU:
+                for (int elem = 0; elem < numElems; ++elem) {
+                    res[elem] = in[elem] > 0.0 ? in[elem] : 0.0;
                 }
                 return res;
             default:
@@ -221,28 +243,117 @@ class Network implements Serializable {
     }
 
     void train(String inFileName, int epochs) throws IOException {
+
         boolean append = false;
-        String outFileName = "results-" + inFileName;
-        for (int epoch = 0; epoch < epochs; ++epoch, append = true) {
-            try (BufferedReader reader = new BufferedReader(new FileReader(inFileName))) {
-                try (PrintWriter writer = new PrintWriter(new FileWriter(outFileName, append))) {
-                    int sample = 1;
-                    writer.printf("Epoch %d:\n", epoch);
-                    while (reader.ready()) {
-                        double[] in = Arrays.stream(reader.readLine().split("")).mapToDouble(ch -> ch.equals("X") ? 1.0 : 0.0).toArray();
-                        double[] actual = Arrays.stream(reader.readLine().split(" ")).mapToDouble(Double::parseDouble).toArray();
-                        double loss = learn(in, actual);
-                        writer.printf("Sample %d: Loss = %f\n", sample, loss);
-                        ++sample;
+        String outFileName = "results.txt";
+
+        File datasetFile = new File(inFileName);
+
+        if (!datasetFile.exists()) {
+            System.out.println("Dataset does not exist!");
+        } else {
+            double[] in = new double[784];
+            double[] actual = new double[10];
+            double loss;
+            int ans;
+
+            if (datasetFile.isFile()) {
+                ans = textToArr(datasetFile, in, 28, 28, true);
+                oneHotEncode(ans, actual);
+                loss = learn(in, actual);
+                System.out.printf("Digit: %d | Loss: %.7f\n", ans, loss);
+            } else {
+                File[] trainFiles = datasetFile.listFiles();
+                if (trainFiles.length == 0) {
+                    System.out.println("Dataset does not have any training examples!");
+                } else {
+                    int numFiles = trainFiles.length;
+                    int index;
+                    File tempFile;
+                    Random randGen = new Random();
+
+                    for (int epoch = 0; epoch < epochs; ++epoch, append = true) {
+//                        try (PrintWriter writer = new PrintWriter(new FileWriter(outFileName, append))) {
+//                            writer.printf("Epoch %d:\n", epoch + 1);
+                        for (int file = numFiles - 1; file >= 0; --file) {
+                            index = randGen.nextInt(file + 1);
+                            if (trainFiles[index].isDirectory()) {
+                                continue;
+                            }
+                            ans = textToArr(trainFiles[index], in, 28, 28, true);
+                            oneHotEncode(ans, actual);
+                            loss = learn(in, actual);
+//                                writer.printf("#%d %s %d %f\n", numFiles - file, trainFiles[index].getName(), ans, loss);
+                            System.out.printf("\rEpoch (%d/%d): Trained files (%d/%d) Loss : %.7f", epoch + 1, epochs, numFiles - file, numFiles, loss);
+                            tempFile = trainFiles[index];
+                            trainFiles[index] = trainFiles[file];
+                            trainFiles[file] = tempFile;
+                        }
+//                        } catch (FileNotFoundException e) {
+//                            throw new FileNotFoundException();
+//                        }
                     }
-                    writer.println();
-                } catch (FileNotFoundException e) {
-                    System.out.printf("File: %s not found!", outFileName);
+                    System.out.println();
                 }
-            } catch (FileNotFoundException e) {
-                System.out.printf("File: %s not found!", inFileName);
             }
         }
+    }
+
+    void test(String inFileName) throws IOException {
+
+        File datasetFile = new File(inFileName);
+        File[] trainFiles;
+
+        if (!datasetFile.exists()) {
+            System.out.println("Dataset does not exist!");
+        } else {
+            double[] in = new double[784];
+            if (datasetFile.isFile()) {
+                textToArr(datasetFile, in, 28, 28, false);
+                int pred = displayAns(in);
+                System.out.printf("This number is %d\n", pred);
+            } else {
+                trainFiles = datasetFile.listFiles();
+                if (trainFiles.length == 0) {
+                    System.out.println("Dataset does not have any training examples!");
+                } else {
+                    int numFiles = trainFiles.length;
+                    int numCorrect = 0;
+                    for (int file = 0; file < numFiles; ++file) {
+                        int ans = textToArr(trainFiles[file], in, 28, 28, true);
+                        int pred = displayAns(in);
+                        if (pred == ans) {
+                            ++numCorrect;
+                        }
+                        System.out.printf("\rThe network prediction accuracy: %d/%d, %.2f%%", numCorrect, file + 1, (numCorrect * 100) / (double) (file + 1));
+                    }
+                    System.out.println();
+                }
+            }
+        }
+    }
+
+    private int textToArr(File file, double[] in, int height, int width, boolean readAns) throws IOException {
+        int ans = -1;
+        try (BufferedReader reader = new BufferedReader(new FileReader(file))) {
+            for (int row = 0; row < height; ++row) {
+                double[] arrTemp = Arrays.stream(reader.readLine().split("\t")).mapToDouble(num -> (Double.parseDouble(num) / 255.0)).toArray();
+                System.arraycopy(arrTemp, 0, in, width * row, width);
+            }
+            if (readAns) {
+                ans = Integer.parseInt(reader.readLine());
+            }
+        } catch (FileNotFoundException e) {
+            throw new FileNotFoundException();
+        } finally {
+            return ans;
+        }
+    }
+
+    private void oneHotEncode(int ans, double[] arr) {
+        assert (ans < arr.length && ans >= 0) : "Invalid answer for training example";
+        Arrays.fill(arr, 0.0);
+        arr[ans] = 1.0;
     }
 
     private double learn(double[] in, double[] actual) {
@@ -273,16 +384,26 @@ class Network implements Serializable {
         return loss;
     }
 
-    double[] displayAns(double[] in) {
+    int displayAns(double[] in) {
+
         double[] inOut = in;
+
         for (int layer = 0; layer < numLayers; ++layer) {
             inOut = layers[layer].feedforward(inOut);
             inOut = ActivFunc.getActivFuncOf(activFuncType[layer], inOut);
         }
-        return inOut;
+
+        int maxNeuron = 0;
+
+        for (int neuron = 1; neuron < inOut.length; ++neuron) {
+            if (inOut[neuron] > inOut[maxNeuron]) {
+                maxNeuron = neuron;
+            }
+        }
+        return maxNeuron;
     }
 
-    static Network createRandomGaussianNetwork(int[] layerSizes, Loss lossType, int numInputs, double learnRate) {
+    static Network createRandomGaussianNetwork(int[] layerSizes, Loss lossType, ActivFunc[] activFuncType, int numInputs, double learnRate) {
         int numLayers = layerSizes.length;
         if (numLayers < 1) {
             throw new IllegalArgumentException(String.format("Cannot have < 1 layer (%d) in network", numLayers));
@@ -292,9 +413,6 @@ class Network implements Serializable {
         for (int layer = 1; layer < numLayers; ++layer) {
             layers_init[layer] = Layer.createRandomGaussianLayer(layerSizes[layer], layerSizes[layer - 1], learnRate);
         }
-        ActivFunc[] activFuncType = new ActivFunc[numLayers];
-        Arrays.fill(activFuncType, 0, numLayers - 1, ActivFunc.SIGMOID);
-        activFuncType[numLayers - 1] = ActivFunc.SOFTMAX;
         return new Network(numLayers, layers_init, lossType, activFuncType);
     }
 }
