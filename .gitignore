@@ -1,0 +1,8 @@
+# Don't track content of these folders
+.idea/
+out/
+
+# Don't track these configuration files
+*.iml
+*.txt
+!inputs.txt
