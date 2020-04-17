@@ -2,7 +2,7 @@ import java.io.*;
 
 class SerializationUtils {
 
-    static void serialize(Object obj, String fileName) {
+    static boolean serialize(Object obj, String fileName) {
         try {
             FileOutputStream fos = new FileOutputStream(fileName);
             BufferedOutputStream bos = new BufferedOutputStream(fos);
@@ -10,8 +10,10 @@ class SerializationUtils {
             oos.writeObject(obj);
             oos.close();
             System.out.println("Done! Saved to the file.");
+            return true;
         } catch (IOException e) {
             System.out.printf("Error writing to file! (%s)\n", e.getMessage());
+            return false;
         }
     }
 
@@ -24,10 +26,10 @@ class SerializationUtils {
             ois.close();
             return obj;
         } catch (IOException e) {
-            System.out.printf("Error in reading from file! (%s)", e.getMessage());
+            System.out.printf("Error in reading from file! (%s)\n", e.toString());
             return null;
         } catch (ClassNotFoundException e) {
-            System.out.printf("Could not find the right class! (%s)", e.getMessage());
+            System.out.printf("Could not find the right class! (%s)\n", e.toString());
             return null;
         }
     }

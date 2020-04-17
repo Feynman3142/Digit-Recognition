@@ -190,7 +190,7 @@ class Layer implements Serializable {
         return dEdX;
     }
 
-    static Layer createRandomGaussianLayer(int numNeurons, int numWeights, double learnRate) {
+    static Layer createLayer(int numNeurons, int numWeights, double learnRate, boolean shouldXavInit) {
         if (numNeurons < 1) {
             throw new IllegalArgumentException(String.format("Cannot have < 1 (%d) neuron in a layer", numNeurons));
         } else if (numWeights < 1) {
@@ -199,128 +199,259 @@ class Layer implements Serializable {
             throw new IllegalArgumentException(String.format("Learning rate should be in range (0, 10] (%f)", learnRate));
         }
         Random randGen = new Random();
+        double xavier_init = shouldXavInit ? Math.sqrt(6.0 / (numNeurons + numWeights)) : 1.0;
         double[][] W_init = new double[numWeights][numNeurons];
         for (int row = 0; row < numWeights; ++row) {
-            Arrays.setAll(W_init[row], i -> randGen.nextGaussian());
+            Arrays.setAll(W_init[row], i -> randGen.nextGaussian() * xavier_init);
         }
         double[][] Wt_init = Matrix.transpose(W_init, numWeights, numNeurons);
 
         double[] B_init = new double[numNeurons];
-        Arrays.setAll(B_init, i -> randGen.nextGaussian());
+        Arrays.fill(B_init, 0.0);
         return new Layer(numNeurons, numWeights, W_init, Wt_init, B_init, learnRate);
+    }
+}
+
+class ScaleMethods implements Serializable {
+
+    private static final long serialVersionUID = 2L;
+    private double MEAN;
+    private double STD;
+    private double SCALE_FACTOR;
+    private String scalingMethod;
+
+    String getScalingMethod() {
+        return scalingMethod;
+    }
+
+    double getMEAN() {
+        return MEAN;
+    }
+
+    double getSCALE_FACTOR() {
+        return SCALE_FACTOR;
+    }
+
+    double getSTD() {
+        return STD;
+    }
+
+    double identity(double num) {
+        return num;
+    }
+
+    double standardize(double num) {
+        return ((num - this.MEAN) / this.STD);
+    }
+
+    double normalize(double num) {
+        return (num * this.SCALE_FACTOR);
+    }
+
+    double centre(double num) {
+        return (num - this.MEAN);
+    }
+
+    ScaleMethods(double mean, double std) {
+        this.MEAN = mean;
+        this.STD = std;
+        this.scalingMethod = "standardize";
+    }
+
+    ScaleMethods(double val, boolean isScaleFactor) {
+        if (isScaleFactor) {
+            this.SCALE_FACTOR = val;
+            this.scalingMethod = "normalize";
+        } else {
+            this.MEAN = val;
+            this.scalingMethod = "centre";
+        }
+    }
+
+    ScaleMethods() {
+        this.scalingMethod = "identity";
+    }
+}
+
+abstract class Scaler implements Serializable {
+
+    private static final long serialVersionUID = 2L;
+    private double mean;
+    private double std;
+    private double scaleFactor;
+    private String scaleMethodType;
+
+    double getMean() {
+        return mean;
+    }
+
+    double getScaleFactor() {
+        return scaleFactor;
+    }
+
+    double getStd() {
+        return std;
+    }
+
+    String getScaleMethodType() {
+        return scaleMethodType;
+    }
+
+    void setMean(double mean) {
+        this.mean = mean;
+    }
+
+    void setScaleFactor(double scaleFactor) {
+        this.scaleFactor = scaleFactor;
+    }
+
+    void setScaleMethodType(String scaleMethodType) {
+        this.scaleMethodType = scaleMethodType;
+    }
+
+    void setStd(double std) {
+        this.std = std;
+    }
+
+    abstract double scale(double num);
+}
+
+class Identity extends Scaler {
+
+    Identity() {
+        setScaleMethodType("identity");
+    }
+
+    @Override
+    double scale(double num) {
+        return num;
+    }
+}
+
+class Normalizer extends Scaler {
+
+    Normalizer(double scaleFactor) {
+        setScaleFactor(scaleFactor);
+        setScaleMethodType("normalize");
+    }
+
+    @Override
+    double scale(double num) {
+        return (num * getScaleFactor());
+    }
+}
+
+class Standardizer extends Scaler {
+
+    Standardizer(double mean, double std) {
+        setMean(mean);
+        setStd(std);
+        setScaleMethodType("standardize");
+    }
+
+    @Override
+    double scale(double num) {
+        return ((num - getMean()) / getStd());
+    }
+}
+
+class Centralizer extends Scaler {
+
+    Centralizer(double mean) {
+        setMean(mean);
+        setScaleMethodType("centralize");
+    }
+
+    @Override
+    double scale(double num) {
+        return (num - getMean());
     }
 }
 
 class Network implements Serializable {
 
-    private static final long serialVersionUID = 2L;
+    private static final long serialVersionUID = 3L;
     private int numLayers;
     private Loss lossType;
     private ActivFunc[] activFuncType;
     private Layer[] layers;
+    private File datasetFile;
+    private Scaler scaler;
 
-    private Network(int numLayers, Layer[] layers, Loss lossType, ActivFunc[] activFuncType) {
+    private Network(int numLayers, Layer[] layers, Loss lossType, ActivFunc[] activFuncType, File datasetFile, Scaler scaler) {
         this.numLayers = numLayers;
         this.layers = layers;
         this.lossType = lossType;
         this.activFuncType = activFuncType;
+        this.datasetFile = datasetFile;
+        this.scaler = scaler;
     }
 
-    int getNumLayers() {
-        return numLayers;
+    void setDatasetFile(File datasetFile) {
+        this.datasetFile = datasetFile;
     }
 
-    Loss getLossType() {
-        return lossType;
-    }
-
-    ActivFunc[] getActivFuncType() {
-        return activFuncType;
-    }
-
-    Layer[] getLayers() {
-        return layers;
-    }
-
-    void train(String inFileName, int epochs) throws IOException {
-
-        boolean append = false;
-        String outFileName = "results.txt";
-
-        File datasetFile = new File(inFileName);
+    void train(int epochs) throws IOException {
 
         if (!datasetFile.exists()) {
             System.out.println("Dataset does not exist!");
         } else {
-            double[] in = new double[784];
-            double[] actual = new double[10];
+            double[] in = new double[layers[0].getNumWeights()];
+            double[] actual = new double[layers[numLayers - 1].getNumNeurons()];
             double loss;
-            int ans;
 
-            if (datasetFile.isFile()) {
-                ans = textToArr(datasetFile, in, 28, 28, true);
-                oneHotEncode(ans, actual);
-                loss = learn(in, actual);
-                System.out.printf("Digit: %d | Loss: %.7f\n", ans, loss);
+            File[] trainFiles = datasetFile.listFiles();
+            if (trainFiles.length == 0) {
+                System.out.println("Dataset does not have any training examples!");
             } else {
-                File[] trainFiles = datasetFile.listFiles();
-                if (trainFiles.length == 0) {
-                    System.out.println("Dataset does not have any training examples!");
-                } else {
-                    int numFiles = trainFiles.length;
-                    int index;
-                    File tempFile;
-                    Random randGen = new Random();
+                int numFiles = trainFiles.length;
+                int index;
+                File tempFile;
+                Random randGen = new Random();
 
-                    for (int epoch = 0; epoch < epochs; ++epoch, append = true) {
-//                        try (PrintWriter writer = new PrintWriter(new FileWriter(outFileName, append))) {
-//                            writer.printf("Epoch %d:\n", epoch + 1);
-                        for (int file = numFiles - 1; file >= 0; --file) {
-                            index = randGen.nextInt(file + 1);
-                            if (trainFiles[index].isDirectory()) {
-                                continue;
-                            }
-                            ans = textToArr(trainFiles[index], in, 28, 28, true);
-                            oneHotEncode(ans, actual);
-                            loss = learn(in, actual);
-//                                writer.printf("#%d %s %d %f\n", numFiles - file, trainFiles[index].getName(), ans, loss);
-                            System.out.printf("\rEpoch (%d/%d): Trained files (%d/%d) Loss : %.7f", epoch + 1, epochs, numFiles - file, numFiles, loss);
-                            tempFile = trainFiles[index];
-                            trainFiles[index] = trainFiles[file];
-                            trainFiles[file] = tempFile;
-                        }
-//                        } catch (FileNotFoundException e) {
-//                            throw new FileNotFoundException();
-//                        }
+                for (int epoch = 0; epoch < epochs; ++epoch) {
+                    for (int file = numFiles - 1; file >= 0; --file) {
+                        index = randGen.nextInt(file + 1);
+                        processSample(trainFiles[index], in, actual);
+                        loss = learn(in, actual);
+                        System.out.printf("\rEpoch (%d/%d): Trained files (%d/%d) Loss : %.7f", epoch + 1, epochs, numFiles - file, numFiles, loss);
+                        tempFile = trainFiles[index];
+                        trainFiles[index] = trainFiles[file];
+                        trainFiles[file] = tempFile;
                     }
-                    System.out.println();
                 }
+                System.out.println();
             }
         }
     }
 
     void test(String inFileName) throws IOException {
 
-        File datasetFile = new File(inFileName);
-        File[] trainFiles;
+        File datasetFile;
+
+        if ("".equals(inFileName)) {
+            datasetFile = this.datasetFile;
+        } else {
+            datasetFile = new File(inFileName);
+        }
 
         if (!datasetFile.exists()) {
             System.out.println("Dataset does not exist!");
         } else {
             double[] in = new double[784];
             if (datasetFile.isFile()) {
-                textToArr(datasetFile, in, 28, 28, false);
+                readSample(datasetFile, in);
                 int pred = displayAns(in);
                 System.out.printf("This number is %d\n", pred);
             } else {
-                trainFiles = datasetFile.listFiles();
+                File[] trainFiles = datasetFile.listFiles();
                 if (trainFiles.length == 0) {
                     System.out.println("Dataset does not have any training examples!");
                 } else {
                     int numFiles = trainFiles.length;
                     int numCorrect = 0;
                     for (int file = 0; file < numFiles; ++file) {
-                        int ans = textToArr(trainFiles[file], in, 28, 28, true);
+                        int ans = readSample(trainFiles[file], in);
                         int pred = displayAns(in);
                         if (pred == ans) {
                             ++numCorrect;
@@ -333,25 +464,25 @@ class Network implements Serializable {
         }
     }
 
-    private int textToArr(File file, double[] in, int height, int width, boolean readAns) throws IOException {
-        int ans = -1;
+    private int readSample(File file, double[] in) throws IOException {
         try (BufferedReader reader = new BufferedReader(new FileReader(file))) {
-            for (int row = 0; row < height; ++row) {
-                double[] arrTemp = Arrays.stream(reader.readLine().split("\t")).mapToDouble(num -> (Double.parseDouble(num) / 255.0)).toArray();
-                System.arraycopy(arrTemp, 0, in, width * row, width);
+            for (int row = 0; row < 28; ++row) {
+                double[] arrTemp = Arrays.stream(reader.readLine().split("\t")).mapToDouble(num -> scaler.scale(Double.parseDouble(num))).toArray();
+                System.arraycopy(arrTemp, 0, in, 28 * row, 28);
             }
-            if (readAns) {
-                ans = Integer.parseInt(reader.readLine());
-            }
+            return Integer.parseInt(reader.readLine());
         } catch (FileNotFoundException e) {
             throw new FileNotFoundException();
-        } finally {
-            return ans;
         }
     }
 
-    private void oneHotEncode(int ans, double[] arr) {
-        assert (ans < arr.length && ans >= 0) : "Invalid answer for training example";
+    private void processSample(File file, double[] in, double[] actual) throws IOException {
+        int ans = readSample(file, in);
+        oneHotEncode(ans, actual);
+    }
+
+    private static void oneHotEncode(int ans, double[] arr) {
+        assert (ans < arr.length && ans >= 0) : String.format("Invalid answer (%s) for training example with output vector of length %d", ans, arr.length);
         Arrays.fill(arr, 0.0);
         arr[ans] = 1.0;
     }
@@ -384,7 +515,7 @@ class Network implements Serializable {
         return loss;
     }
 
-    int displayAns(double[] in) {
+    private int displayAns(double[] in) {
 
         double[] inOut = in;
 
@@ -403,16 +534,122 @@ class Network implements Serializable {
         return maxNeuron;
     }
 
-    static Network createRandomGaussianNetwork(int[] layerSizes, Loss lossType, ActivFunc[] activFuncType, int numInputs, double learnRate) {
+    static Network createNetwork(int[] layerSizes, Loss lossType, ActivFunc[] activFuncType, int numInputs, double learnRate, String inputDataPath, int scaleMethodChoice, double scaleFactor) throws IOException {
         int numLayers = layerSizes.length;
         if (numLayers < 1) {
-            throw new IllegalArgumentException(String.format("Cannot have < 1 layer (%d) in network", numLayers));
+            System.out.printf("Cannot have < 1 layer (%d) in network\n", numLayers);
+            return null;
+        } else if (numInputs < 1) {
+            System.out.printf("Cannot have < 1 input (%d) to network\n", numInputs);
+            return null;
+        } else {
+            boolean shouldXavInit = scaleMethodChoice == 3;
+            Layer[] layers_init = new Layer[numLayers];
+            layers_init[0] = Layer.createLayer(layerSizes[0], numInputs, learnRate, shouldXavInit);
+            for (int layer = 1; layer < numLayers; ++layer) {
+                layers_init[layer] = Layer.createLayer(layerSizes[layer], layerSizes[layer - 1], learnRate, shouldXavInit);
+            }
+
+            ScaleMethods scaleMethod;
+            File inputDataFile = new File(inputDataPath);
+            Scaler scaler;
+
+            if (scaleMethodChoice == 0) {
+                scaler = new Identity();
+            } else if (scaleMethodChoice == 1) {
+                scaler = new Normalizer(scaleFactor);
+            } else {
+                if (inputDataFile.exists() && inputDataFile.isDirectory()) {
+                    File[] inputDataSampArr = inputDataFile.listFiles();
+                    int numFiles = inputDataSampArr.length;
+                    if (numFiles == 0) {
+                        System.out.println("Dataset has no training samples!");
+                        return null;
+                    } else {
+                        double mean = findMean(inputDataSampArr);
+                        if (scaleMethodChoice == 3) {
+                            double std = findSTD(mean, inputDataSampArr);
+                            scaler = new Standardizer(mean, std);
+                        } else {
+                            scaler = new Centralizer(mean);
+                        }
+                    }
+                } else {
+                    System.out.println("Dataset is a file/non-existent!");
+                    return null;
+                }
+            }
+            return new Network(numLayers, layers_init, lossType, activFuncType, inputDataFile, scaler);
         }
-        Layer[] layers_init = new Layer[numLayers];
-        layers_init[0] = Layer.createRandomGaussianLayer(layerSizes[0], numInputs, learnRate);
-        for (int layer = 1; layer < numLayers; ++layer) {
-            layers_init[layer] = Layer.createRandomGaussianLayer(layerSizes[layer], layerSizes[layer - 1], learnRate);
+    }
+
+    private static double findMean(File ... filePaths) throws IOException {
+        int numFiles = filePaths.length;
+        double temp = 0.0;
+        double avg = 0.0;
+        double total = numFiles * 784;
+
+        for (int file = 0; file < numFiles; ++file) {
+            try (BufferedReader reader = new BufferedReader(new FileReader(filePaths[file]))) {
+                for (int row = 0; row < 28; ++row) {
+                    temp += Arrays.stream(reader.readLine().split("\t")).mapToDouble(Double::parseDouble).sum();
+                }
+            } catch (FileNotFoundException e) {
+                throw new FileNotFoundException(String.format("%s", e.toString()));
+            }
+            System.out.printf("\rCalculating parameters [MEAN] (%d/%d) files", file + 1, numFiles);
+            avg += temp / total;
+            temp = 0.0;
         }
-        return new Network(numLayers, layers_init, lossType, activFuncType);
+        System.out.println("\rCompleted calculation [MEAN]");
+        return avg;
+    }
+
+    private static double findSTD(double mean, File ... filePaths) throws IOException {
+        int numFiles = filePaths.length;
+        double temp = 0.0;
+        double avg = 0.0;
+        double total = numFiles * 784;
+
+        for (int file = 0; file < numFiles; ++file) {
+            try (BufferedReader reader = new BufferedReader(new FileReader(filePaths[file]))) {
+                for (int row = 0; row < 28; ++row) {
+                    temp += Arrays.stream(reader.readLine().split("\t")).mapToDouble(num -> Math.pow(Double.parseDouble(num) - mean, 2)).sum();
+                }
+            } catch (FileNotFoundException e) {
+                throw new FileNotFoundException();
+            }
+            System.out.printf("\rCalculating parameters [STD] (%d/%d) files", file + 1, numFiles);
+            avg += temp / total;
+            temp = 0.0;
+        }
+        System.out.println("\rCompleted calculation [STD]");
+        return Math.sqrt(avg);
+    }
+
+    @Override
+    public String toString() {
+        StringBuilder string = new StringBuilder();
+        string.append(String.format("Learning rate: %.3f\nLoss function: %s\n", layers[0].getLearnRate(), lossType.name()));
+        switch (scaler.getScaleMethodType()) {
+            case "identity":
+                string.append("Scaling Methods: None used!\nParameters of dataset: None calculated\n");
+                break;
+            case "normalize":
+                string.append(String.format("Scaling Methods: Normalization [SCALE FACTOR = %.6f]\nParameters of dataset: None calculated\n", scaler.getScaleFactor()));
+                break;
+            case "centralize":
+                string.append(String.format("Scaling Methods: Centralizing\nParameters of dataset: [MEAN = %.6f]\n", scaler.getMean()));
+                break;
+            case "standardize":
+                string.append(String.format("Scaling Methods: Standardizing\nParameters of dataset: [MEAN = %.6f] [STD = %.6f]\n", scaler.getMean(), scaler.getStd()));
+                break;
+            default:
+                break;
+        }
+        for (int layer = 0; layer < numLayers; ++layer) {
+            string.append(String.format("Layer %d: %d -> %d -> %s\n", layer + 1, layers[layer].getNumWeights(), layers[layer].getNumNeurons(), activFuncType[layer].name()));
+        }
+        return string.toString();
     }
 }
